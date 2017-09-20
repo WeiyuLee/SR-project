@@ -16,6 +16,7 @@ import h5py
 import scipy.misc
 import scipy.ndimage
 import numpy as np
+import random
 
 import tensorflow as tf
 
@@ -74,7 +75,7 @@ def preprocess(input_path, label_path, scale=3):
     
     return input_, label_
 
-def get_file_path(sess, dataset_folder, child_folder=""):
+def get_file_path(sess, dataset_folder):
     """
     Get the dataset file path.
     According to the scale, choose the correct folder that made by Matlab preprocessing code.
@@ -93,29 +94,29 @@ def get_file_path(sess, dataset_folder, child_folder=""):
     input_data_ext = "*_bicubic_scale_{}.bmp".format(FLAGS.scale)
     
     if FLAGS.is_train:
-        data_dir = os.path.join(os.getcwd(), dataset_folder, child_folder, preprocessed_folder)
+        data_dir = os.path.join(os.getcwd(), dataset_folder, preprocessed_folder)
         label_data = glob.glob(os.path.join(data_dir, label_data_ext))
         input_data = glob.glob(os.path.join(data_dir, input_data_ext))
     else:
-        data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset_folder)), child_folder, preprocessed_folder)
+        data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset_folder)), preprocessed_folder)
         label_data = glob.glob(os.path.join(data_dir, label_data_ext))
         input_data = glob.glob(os.path.join(data_dir, input_data_ext))
+
+    org_data = glob.glob(os.path.join(dataset_folder, "*.bmp"))
     
     label_data = sorted(label_data)
     input_data = sorted(input_data)
-       
-    return input_data, label_data
+    org_data = sorted(org_data)   
+   
+    return input_data, label_data, org_data
 
-def make_data(sess, data, label):
+def make_data(data, label, save_dir):
     """
     Make input data as h5 file format
     Depending on 'is_train' (flag value), savepath would be changed.
     """
     
-    if FLAGS.is_train:
-        savepath = os.path.join(os.getcwd(), 'checkpoint/train.h5')
-    else:
-        savepath = os.path.join(os.getcwd(), 'checkpoint/test.h5')
+    savepath = os.path.join(os.getcwd(), save_dir)
     
     with h5py.File(savepath, 'w') as hf:
         hf.create_dataset('data', data=data)
@@ -155,16 +156,12 @@ def modcrop(image, scale=3):
         
     return image
 
-def input_setup(sess, config):
+def input_setup(sess, data_dir, save_dir, config):
     """
     Read image files and make their sub-images and saved them as a h5 file format.
     """
-  
-    # Load data path
-    if config.is_train:
-        input_data, label_data = get_file_path(sess, dataset_folder="Train")
-    else:
-        input_data, label_data = get_file_path(sess, dataset_folder="Test", child_folder=config.test_folder)
+
+    input_data, label_data, org_data = get_file_path(sess, dataset_folder=data_dir)        
 
     sub_input_sequence = []
     sub_label_sequence = []
@@ -172,10 +169,11 @@ def input_setup(sess, config):
     # Calculate the padding size
     padding = int(abs(config.image_size - config.label_size) / 2) # 6  
 
-    if config.is_train:            
+    if config.is_train:
         for i in range(len(input_data)):
             # Preprocess the input images
             input_, label_ = preprocess(input_data[i], label_data[i], config.scale)
+        
             if len(input_.shape) == 3:
                 h, w, _ = input_.shape
             else:
@@ -195,40 +193,56 @@ def input_setup(sess, config):
                     sub_label_sequence.append(sub_label)
 
     else:       
-        # Preprocess the input images
-        input_, label_ = preprocess(input_data[2], label_data[2], config.scale)
-    
-        if len(input_.shape) == 3:
-            h, w, _ = input_.shape
-        else:
-            h, w = input_.shape
-    
-        # Crop the input images
-        # Numbers of sub-images in height and width of image are needed to compute merge operation.
-        nx = ny = 0       
-        for x in range(0, h-config.image_size+1, config.extract_stride):
-            nx += 1; ny = 0
-            for y in range(0, w-config.image_size+1, config.extract_stride):
-                ny += 1
-                sub_input = input_[x:x+config.image_size, y:y+config.image_size] # [33 x 33]
-                sub_label = label_[x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size] # [21 x 21]
-                
-                sub_input = sub_input.reshape([config.image_size, config.image_size, 1])  
-                sub_label = sub_label.reshape([config.label_size, config.label_size, 1])
+        ## nxs, nys: Record the patch number of every test image 
+        nxs = nys = []
+
+        for i in range(len(input_data)):
+            # Preprocess the input images
+            input_, label_ = preprocess(input_data[i], label_data[i], config.scale)
         
-                sub_input_sequence.append(sub_input)
-                sub_label_sequence.append(sub_label)
-
-        # Save the input images
-        # According to the size of label images, crop the suitable size 
-        # that match with the output. 
-        print("Saving the original images... size: [{} x {}]".format(config.extract_stride*nx, config.extract_stride*ny))
-        image_path = os.path.join(os.getcwd(), config.output_dir)
-        org_img_path = os.path.join(image_path, "test_org_img.png")      
-        bicubic_img_path = os.path.join(image_path, "test_bicubic_img.png")                 
-        imsave(label_[padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], org_img_path)
-        imsave(input_[padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], bicubic_img_path)
-
+            if len(input_.shape) == 3:
+                h, w, _ = input_.shape
+            else:
+                h, w = input_.shape
+        
+            # Crop the input images
+            # Numbers of sub-images in height and width of image are needed to compute merge operation.
+            nx = ny = 0       
+            for x in range(0, h-config.image_size+1, config.extract_stride):
+                nx += 1; ny = 0
+                for y in range(0, w-config.image_size+1, config.extract_stride):
+                    ny += 1
+                    sub_input = input_[x:x+config.image_size, y:y+config.image_size] # [33 x 33]
+                    sub_label = label_[x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size] # [21 x 21]
+                    
+                    sub_input = sub_input.reshape([config.image_size, config.image_size, 1])  
+                    sub_label = sub_label.reshape([config.label_size, config.label_size, 1])
+            
+                    sub_input_sequence.append(sub_input)
+                    sub_label_sequence.append(sub_label)
+    
+            # Save the input images
+            # According to the size of label images, crop the suitable size 
+            # that match with the output. 
+            print("Saving the original images... size: [{} x {}]".format(config.extract_stride*nx, config.extract_stride*ny))
+            
+            # Find the file name and ext
+            base = os.path.basename(org_data[i])
+            output_filename, output_ext = os.path.splitext(base)
+            output_path = os.path.join(os.getcwd(), config.output_dir)
+            
+            # Combine the path str
+            org_img_path = os.path.join(output_path, output_filename + "_org_img" + output_ext)      
+            bicubic_img_path = os.path.join(output_path, output_filename + "_bicubic_img" + output_ext)                 
+            
+            # Save images
+            imsave(label_[padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], org_img_path)
+            imsave(input_[padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], bicubic_img_path)
+            
+            # Record the patch number
+            nxs.append(nx)
+            nys.append(ny)
+            
     """
     len(sub_input_sequence) : the number of sub_input (33 x 33 x ch) in one image
     (sub_input_sequence[0]).shape : (33, 33, 1)
@@ -237,10 +251,21 @@ def input_setup(sess, config):
     arrdata = np.asarray(sub_input_sequence) # [?, 33, 33, 1]
     arrlabel = np.asarray(sub_label_sequence) # [?, 21, 21, 1]
 
-    make_data(sess, arrdata, arrlabel)
+    make_data(arrdata, arrlabel, save_dir)
 
     if not config.is_train:
-        return nx, ny
+        return nxs, nys, org_data
+
+def batch_shuffle(data, label, batch_size):
+    """
+    Shuffle the batch data
+    """
+    # Shuffle the batch data
+    shuffled_data = list(zip(data, label))
+    random.shuffle(shuffled_data)
+    data_shuffled, label_shuffled = zip(*shuffled_data)
+    
+    return data_shuffled, label_shuffled
 
 def psnr(img1, img2, max_I=255):
     """

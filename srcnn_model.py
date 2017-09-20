@@ -15,11 +15,11 @@ from utils import (
   imsave,
   merge,
   imread,
-  psnr
+  psnr,
+  batch_shuffle
 )
 
 import tensorflow as tf
-import random
 
 import model_zoo
 
@@ -86,12 +86,24 @@ class SRCNN(object):
         Training process.
         """     
         print("Training...")
-    
-        input_setup(self.sess, config)
-       
-        data_dir = os.path.join('./{}'.format(config.checkpoint_dir), "train.h5")
-    
-        train_data, train_label = read_data(data_dir)
+
+        # Define dataset path
+        train_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.train_h5_name)
+        test_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.test_h5_name)
+
+        # If dataset not exists, create it.
+        if not os.path.exists(train_data_dir):
+            print("Preparing training dataset...")
+            save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.train_h5_name)
+            input_setup(self.sess, config.train_dir, save_dir, config)
+        if not os.path.exists(test_data_dir):
+            print("Preparing testing dataset...")
+            save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.test_h5_name)
+            input_setup(self.sess, config.test_dir, save_dir, config)
+        
+        # Read data from .h5 file
+        train_data, train_label = read_data(train_data_dir)
+        test_data, test_label = read_data(test_data_dir)
     
         # Stochastic gradient descent with the standard backpropagation
         #self.train_op = tf.train.GradientDescentOptimizer(config.learning_rate).minimize(self.loss)
@@ -113,14 +125,10 @@ class SRCNN(object):
              
         for ep in range(config.epoch):
             # Run by batch images
-            batch_idxs = len(train_data) // config.batch_size
-              
-            # Shuffle the batch data
-            shuffled_data = list(zip(train_data, train_label))
-            random.shuffle(shuffled_data)
-            train_data, train_label = zip(*shuffled_data)
+            train_batch_idxs = len(train_data) // config.batch_size
+            train_data, train_label = batch_shuffle(train_data, train_label, config.batch_size)
             
-            for idx in range(0, batch_idxs):
+            for idx in range(0, train_batch_idxs):
                 itera_counter += 1
                   
                 # Get the training and testing data
@@ -144,10 +152,18 @@ class SRCNN(object):
     
                 if itera_counter % 500 == 0:
                     self.save(config.checkpoint_dir, config.scale, itera_counter)
-                
-                    print("==> Epoch: [%2d], average loss of 500 steps: [%.8f], average loss: [%.8f]" \
-                         % ((ep+1), avg_500_loss/500, avg_loss/itera_counter))            
-                    avg_500_loss = 0
+                    
+                    # Validation
+                    ## Run the test images
+                    _, test_err = self.sess.run([self.train_op, self.loss], 
+                                           feed_dict={
+                                                       self.images: test_data, 
+                                                       self.labels: test_label,
+                                                       self.dropout: 1.
+                                                     })
+                    print("==> Epoch: [%2d], average loss of 500 steps: [%.8f], average loss: [%.8f], validation loss: [%.8f]" \
+                         % ((ep+1), avg_500_loss/500, avg_loss/itera_counter, test_err))            
+                    avg_500_loss = 0                                      
     
     def test(self, config):
         """
@@ -161,10 +177,12 @@ class SRCNN(object):
         else:
           print(" [!] Load failed...")        
         
-        nx, ny = input_setup(self.sess, config)
+        # Preparing testing dataset (save the cropped image and .h5 file)        
+        save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.test_h5_name)
+        nxs, nys, org_data = input_setup(self.sess, config.test_dir, save_dir, config)
         
+        # Read data from .h5 file
         data_dir = os.path.join('./{}'.format(config.checkpoint_dir), "test.h5")
-        
         test_data, test_label = read_data(data_dir)
            
         result = self.pred.eval({
@@ -173,45 +191,37 @@ class SRCNN(object):
                                     self.dropout: 1.
                                  })
         
-        result = merge(result, [nx, ny])
-        result = result.squeeze()
+        # Run all the test images
+        idx = 0 # record the patches' indeies 
+        for i in range(len(nxs)):
+            tmp_img = merge(result[idx:idx+nxs[i]*nys[i], :, :, :], [nxs[i], nys[i]])
+            tmp_img = tmp_img.squeeze()
+            
+            # Save output image
+            base = os.path.basename(org_data[i])
+            output_filename, output_ext = os.path.splitext(base)
+            output_dir = os.path.join(os.getcwd(), config.output_dir)
+                      
+            test_path = os.path.join(output_dir, output_filename + "_test_img" + output_ext)
+            imsave(tmp_img, test_path)
+            
+            # PSNR
+            ## Read from the output dir. to calculated PSNR value
+            label_path = os.path.join(output_dir, output_filename + "_org_img" + output_ext)
+            bicubic_path = os.path.join(output_dir, output_filename + "_bicubic_img" + output_ext)
+            
+            bicubic_img = imread(bicubic_path, is_grayscale=True)
+            label_img = imread(label_path, is_grayscale=True)
+            test_img = imread(test_path, is_grayscale=True)
+            
+            bicubic_psnr_value = psnr(label_img, bicubic_img)        
+            srcnn_psnr_value = psnr(label_img, test_img)        
+            
+            print("[{}] Bicubic PSNR: [{}]".format(output_filename, bicubic_psnr_value))
+            print("[{}] SRCNN PSNR: [{}]".format(output_filename, srcnn_psnr_value))
         
-        # Save output image
-        output_path = os.path.join(os.getcwd(), config.output_dir)
-        image_path = os.path.join(output_path, "test_img.png")
-        imsave(result, image_path)
-        
-        # PSNR
-        label_path = os.path.join(output_path, "test_org_img.png")
-        bicubic_path = os.path.join(output_path, "test_bicubic_img.png")
-        
-        bicubic_img = imread(bicubic_path, is_grayscale=True)
-        label_img = imread(label_path, is_grayscale=True)
-        output_img = imread(image_path, is_grayscale=True)
-        
-        bicubic_psnr_value = psnr(label_img, bicubic_img)        
-        srcnn_psnr_value = psnr(label_img, output_img)        
-        
-        print("Bicubic PSNR: [{}]".format(bicubic_psnr_value))
-        print("SRCNN PSNR: [{}]".format(srcnn_psnr_value))
-        
-#    def model(self):
-#        """
-#        Testing process.
-#        To avoid border effects during training, all the convolutional layers 
-#        have no padding, and the network produces a smaller output.
-#        """          
-#        
-#        # Layer 1: Patch extraction and representation
-#        conv1 = tf.nn.relu(tf.nn.conv2d(self.images, self.weights['w1'], strides=[1,1,1,1], padding='VALID') + self.biases['b1'])
-#        
-#        # Layer 2: Non-linear mapping
-#        conv2 = tf.nn.relu(tf.nn.conv2d(conv1, self.weights['w2'], strides=[1,1,1,1], padding='VALID') + self.biases['b2'])
-#        
-#        # Layer 3: Reconstruction
-#        conv3 = tf.nn.conv2d(conv2, self.weights['w3'], strides=[1,1,1,1], padding='VALID') + self.biases['b3']
-#        
-#        return conv3
+            ## Update index
+            idx += nxs[i]*nys[i]
 
     def save(self, checkpoint_dir, scale, step):
         """

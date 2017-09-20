@@ -21,10 +21,16 @@ flags.DEFINE_float("learning_rate", 1e-4, "The learning rate of gradient descent
 flags.DEFINE_integer("color_dim", 1, "Dimension of image color. [1]")
 flags.DEFINE_integer("scale", 3, "The size of scale factor for preprocessing input image [3]")
 flags.DEFINE_integer("extract_stride", 14, "The size of stride to apply input image [14]")
+
 flags.DEFINE_string("checkpoint_dir", "checkpoint", "Name of checkpoint directory [checkpoint]")
 flags.DEFINE_string("output_dir", "output", "Name of sample directory [output]")
+flags.DEFINE_string("train_dir", "Train", "Name of train dataset directory")
+flags.DEFINE_string("test_dir", "Test/Set5", "Name of test dataset directory [Test/Set5]")
+
+flags.DEFINE_string("train_h5_name", "train.h5", "Name of train dataset .h5 file")
+flags.DEFINE_string("test_h5_name", "test.h5", "Name of test dataset .h5 file")
+
 flags.DEFINE_boolean("is_train", True, "True for training, False for testing [True]")
-flags.DEFINE_string("test_folder", "Set5", "Name of test dataset directory [Set5]")
 FLAGS = flags.FLAGS
 
 pp = pprint.PrettyPrinter()
