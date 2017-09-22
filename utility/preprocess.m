@@ -1,12 +1,12 @@
 close all; clear all;
 
 %% Choose the target dataset
-preprocess_target = 'train';
-%preprocess_target = 'test';
+%preprocess_target = 'train';
+preprocess_target = 'test';
 
 %% Set the data path
-Train_data_dir = './Train/';
-Test_data_dir = './Test/Set5/';
+Train_data_dir = '../Train/';
+Test_data_dir = '../Test/Set5/';
 %Test_data_dir = './Test/Set14/';
 
 %% DON'T MODIFY ANYTHING BELOWS
@@ -25,7 +25,7 @@ elseif (strcmp(preprocess_target, 'test'))
 end
 
 % Set parameters
-up_scale = 3;
+up_scale = 4;
 file_num = length(data_list);
 
 % Make dir to save the image

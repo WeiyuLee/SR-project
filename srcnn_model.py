@@ -180,7 +180,7 @@ class SRCNN(object):
         # Preparing testing dataset (save the cropped image and .h5 file)        
         save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.test_h5_name)
         nxs, nys, org_data = input_setup(self.sess, config.test_dir, save_dir, config)
-        
+
         # Read data from .h5 file
         data_dir = os.path.join('./{}'.format(config.checkpoint_dir), "test.h5")
         test_data, test_label = read_data(data_dir)

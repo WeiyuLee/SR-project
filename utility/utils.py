@@ -194,7 +194,8 @@ def input_setup(sess, data_dir, save_dir, config):
 
     else:       
         ## nxs, nys: Record the patch number of every test image 
-        nxs = nys = []
+        nxs = []
+        nys = []
 
         for i in range(len(input_data)):
             # Preprocess the input images
