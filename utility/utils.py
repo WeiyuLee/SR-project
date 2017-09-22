@@ -22,7 +22,7 @@ import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
 
-def read_data(path):  
+def read_data(path, stage_size):  
     """
     Read h5 format data file
       
@@ -34,7 +34,10 @@ def read_data(path):
     
     with h5py.File(path, 'r') as hf:
         data = np.array(hf.get('data'))
-        label = np.array(hf.get('label'))
+        
+        label = [None]*stage_size
+        for i in range(stage_size):
+            label[i] = np.array(hf.get('stg_{}_label'.format(i)))
         
     return data, label
 
@@ -58,24 +61,29 @@ def preprocess(input_path, label_path, scale=3):
     
     Args:
         path: file path of desired file
-        input_: image applied bicubic interpolation (low-resolution)
-        label_: image with original resolution (high-resolution)
+        input: image applied bicubic interpolation (low-resolution)
+        label: image with original resolution (high-resolution)
     """
 
     # Read Image
-    input_ = imread(input_path, is_grayscale=True)
-    label_ = imread(label_path, is_grayscale=True)
+    input = imread(input_path, is_grayscale=True)
+    
+    label = []
+    for i in range(len(label_path)):
+        label.append(imread(label_path[i], is_grayscale=True))
+        label[i] = modcrop(label[i], scale)
+        label[i] = label[i] / 255.
    
-    input_ = modcrop(input_, scale)
-    label_ = modcrop(label_, scale)
+    input = modcrop(input, scale)
+    #label = modcrop(label, scale)
     
     # Normalization
-    input_ = input_ / 255.
-    label_ = label_ / 255.
+    input = input / 255.
+    #label = label / 255.
     
-    return input_, label_
+    return input, label
 
-def get_file_path(sess, dataset_folder):
+def get_file_path(sess, stage_size, dataset_folder):
     """
     Get the dataset file path.
     According to the scale, choose the correct folder that made by Matlab preprocessing code.
@@ -90,21 +98,44 @@ def get_file_path(sess, dataset_folder):
     preprocessed_folder = "preprocessed_scale_{}".format(FLAGS.scale)
     
     # Define the preprocessed ext.
-    label_data_ext = "*_org.bmp"
-    input_data_ext = "*_bicubic_scale_{}.bmp".format(FLAGS.scale)
+    label_data_ext = []
+    for i in range(1, stage_size+1):
+        label_data_ext.append("*_stg_{}.bmp".format(i))
+        
+    #stg1_label_data_ext = "*_stg_1.bmp"
+    #stg2_label_data_ext = "*_stg_2.bmp"
+    #stg3_label_data_ext = "*_stg_3.bmp"
     
-    if FLAGS.is_train:
-        data_dir = os.path.join(os.getcwd(), dataset_folder, preprocessed_folder)
-        label_data = glob.glob(os.path.join(data_dir, label_data_ext))
-        input_data = glob.glob(os.path.join(data_dir, input_data_ext))
-    else:
-        data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset_folder)), preprocessed_folder)
-        label_data = glob.glob(os.path.join(data_dir, label_data_ext))
-        input_data = glob.glob(os.path.join(data_dir, input_data_ext))
+    input_data_ext = "*_bicubic_scale_{}_input.bmp".format(FLAGS.scale)
+    
+#    if FLAGS.is_train:
+#        data_dir = os.path.join(os.getcwd(), dataset_folder, preprocessed_folder)
+#        label_data = glob.glob(os.path.join(data_dir, label_data_ext))
+#        input_data = glob.glob(os.path.join(data_dir, input_data_ext))
+#    else:
+#        data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset_folder)), preprocessed_folder)
+#        label_data = glob.glob(os.path.join(data_dir, label_data_ext))
+#        input_data = glob.glob(os.path.join(data_dir, input_data_ext))
+
+    data_dir = os.path.join(os.getcwd(), dataset_folder, preprocessed_folder)
+
+    label_data = [None]*stage_size
+    for i in range(stage_size):
+        label_data[i] = glob.glob(os.path.join(data_dir, label_data_ext[i]))
+        label_data[i] = sorted(label_data[i])
+    
+    #stg1_label_data = glob.glob(os.path.join(data_dir, stg1_label_data_ext))
+    #stg2_label_data = glob.glob(os.path.join(data_dir, stg2_label_data_ext))
+    #stg3_label_data = glob.glob(os.path.join(data_dir, stg3_label_data_ext))   
+        
+    input_data = glob.glob(os.path.join(data_dir, input_data_ext))
 
     org_data = glob.glob(os.path.join(dataset_folder, "*.bmp"))
     
-    label_data = sorted(label_data)
+    
+    #stg1_label_data = sorted(stg1_label_data)
+    #stg2_label_data = sorted(stg2_label_data)
+    #stg3_label_data = sorted(stg3_label_data)
     input_data = sorted(input_data)
     org_data = sorted(org_data)   
    
@@ -113,14 +144,14 @@ def get_file_path(sess, dataset_folder):
 def make_data(data, label, save_dir):
     """
     Make input data as h5 file format
-    Depending on 'is_train' (flag value), savepath would be changed.
     """
     
     savepath = os.path.join(os.getcwd(), save_dir)
     
     with h5py.File(savepath, 'w') as hf:
         hf.create_dataset('data', data=data)
-        hf.create_dataset('label', data=label)
+        for i in range(len(label)):
+            hf.create_dataset('stg_{}_label'.format(i), data=label[i])
 
 def imread(path, is_grayscale=True):
     """
@@ -161,18 +192,19 @@ def input_setup(sess, data_dir, save_dir, config):
     Read image files and make their sub-images and saved them as a h5 file format.
     """
 
-    input_data, label_data, org_data = get_file_path(sess, dataset_folder=data_dir)        
+    input_data, label_data, org_data = get_file_path(sess, config.stage_size, dataset_folder=data_dir)        
 
     sub_input_sequence = []
-    sub_label_sequence = []
+    sub_label_sequence = [[] for i in range(config.stage_size)]
     
     # Calculate the padding size
     padding = int(abs(config.image_size - config.label_size) / 2) # 6  
 
     if config.is_train:
         for i in range(len(input_data)):
+            
             # Preprocess the input images
-            input_, label_ = preprocess(input_data[i], label_data[i], config.scale)
+            input_, label_ = preprocess(input_data[i], [row[i] for row in label_data], config.scale)
         
             if len(input_.shape) == 3:
                 h, w, _ = input_.shape
@@ -180,25 +212,45 @@ def input_setup(sess, data_dir, save_dir, config):
                 h, w = input_.shape
             
             # Crop the input images
+            sub_label = [None]*config.stage_size
             for x in range(0, h-config.image_size+1, config.extract_stride):
                 for y in range(0, w-config.image_size+1, config.extract_stride):
                     sub_input = input_[x:x+config.image_size, y:y+config.image_size] # [33 x 33]
-                    sub_label = label_[x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size] # [21 x 21]
-    
+                    #sub_label = label_[x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size] # [21 x 21]
+                    
+                    for n_stg in range(config.stage_size):
+                        if not n_stg == (config.stage_size - 1):
+                            sub_label[n_stg] = label_[-1][x:x+config.image_size, y:y+config.image_size]###########################
+                            sub_label[n_stg] = sub_label[n_stg].reshape([config.image_size, config.image_size, 1])
+                        else:
+                            sub_label[n_stg] = label_[-1][x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size]###########################
+                            sub_label[n_stg] = sub_label[n_stg].reshape([config.label_size, config.label_size, 1])
+                        
+                        sub_label_sequence[n_stg].append(sub_label[n_stg])
+                        
                     # Make channel value
                     sub_input = sub_input.reshape([config.image_size, config.image_size, 1])  
-                    sub_label = sub_label.reshape([config.label_size, config.label_size, 1])
+                    #sub_label = sub_label.reshape([config.label_size, config.label_size, 1])
     
                     sub_input_sequence.append(sub_input)
-                    sub_label_sequence.append(sub_label)
-
+                    #sub_label_sequence.append(sub_label)
+                    
+        # Make list to numpy array. With this transform
+        arrlabel = [None]*config.stage_size
+        arrdata = np.asarray(sub_input_sequence) # [?, 33, 33, 1]
+        for i in range(config.stage_size):
+            arrlabel[i] = (np.asarray(sub_label_sequence[i])) # [?, 21, 21, 1]
+    
+        make_data(arrdata, arrlabel, save_dir)
+        
     else:       
         ## nxs, nys: Record the patch number of every test image 
-        nxs = nys = []
+        nxs = []
+        nys = []
 
         for i in range(len(input_data)):
             # Preprocess the input images
-            input_, label_ = preprocess(input_data[i], label_data[i], config.scale)
+            input_, label_ = preprocess(input_data[i], [row[i] for row in label_data], config.scale)
         
             if len(input_.shape) == 3:
                 h, w, _ = input_.shape
@@ -207,24 +259,34 @@ def input_setup(sess, data_dir, save_dir, config):
         
             # Crop the input images
             # Numbers of sub-images in height and width of image are needed to compute merge operation.
+            sub_label = [None]*config.stage_size
             nx = ny = 0       
             for x in range(0, h-config.image_size+1, config.extract_stride):
                 nx += 1; ny = 0
                 for y in range(0, w-config.image_size+1, config.extract_stride):
                     ny += 1
-                    sub_input = input_[x:x+config.image_size, y:y+config.image_size] # [33 x 33]
-                    sub_label = label_[x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size] # [21 x 21]
                     
-                    sub_input = sub_input.reshape([config.image_size, config.image_size, 1])  
-                    sub_label = sub_label.reshape([config.label_size, config.label_size, 1])
-            
-                    sub_input_sequence.append(sub_input)
-                    sub_label_sequence.append(sub_label)
+                    sub_input = input_[x:x+config.image_size, y:y+config.image_size] # [33 x 33]
+                    for n_stg in range(config.stage_size):
+                        if not n_stg == (config.stage_size - 1):
+                            sub_label[n_stg] = label_[-1][x:x+config.image_size, y:y+config.image_size]###########################
+                            sub_label[n_stg] = sub_label[n_stg].reshape([config.image_size, config.image_size, 1])
+                        else:
+                            sub_label[n_stg] = label_[-1][x+padding:x+padding+config.label_size, y+padding:y+padding+config.label_size]###########################
+                            sub_label[n_stg] = sub_label[n_stg].reshape([config.label_size, config.label_size, 1])
+                        
+                        sub_label_sequence[n_stg].append(sub_label[n_stg])
     
+                    # Make channel value
+                    sub_input = sub_input.reshape([config.image_size, config.image_size, 1])  
+                    sub_input_sequence.append(sub_input)
+                    
             # Save the input images
             # According to the size of label images, crop the suitable size 
             # that match with the output. 
             print("Saving the original images... size: [{} x {}]".format(config.extract_stride*nx, config.extract_stride*ny))
+            
+            print("nx = {}, ny = {}".format(nx, ny))
             
             # Find the file name and ext
             base = os.path.basename(org_data[i])
@@ -236,22 +298,30 @@ def input_setup(sess, data_dir, save_dir, config):
             bicubic_img_path = os.path.join(output_path, output_filename + "_bicubic_img" + output_ext)                 
             
             # Save images
-            imsave(label_[padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], org_img_path)
+            imsave(label_[-1][padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], org_img_path)
             imsave(input_[padding:padding+config.extract_stride*nx, padding:padding+config.extract_stride*ny], bicubic_img_path)
             
             # Record the patch number
             nxs.append(nx)
             nys.append(ny)
+                
+        # Make list to numpy array. With this transform
+        arrlabel = [None]*config.stage_size
+        arrdata = np.asarray(sub_input_sequence) # [?, 33, 33, 1]
+        for i in range(config.stage_size):
+            arrlabel[i] = (np.asarray(sub_label_sequence[i])) # [?, 21, 21, 1]
+    
+        make_data(arrdata, arrlabel, save_dir)
             
     """
     len(sub_input_sequence) : the number of sub_input (33 x 33 x ch) in one image
     (sub_input_sequence[0]).shape : (33, 33, 1)
     """
-    # Make list to numpy array. With this transform
-    arrdata = np.asarray(sub_input_sequence) # [?, 33, 33, 1]
-    arrlabel = np.asarray(sub_label_sequence) # [?, 21, 21, 1]
-
-    make_data(arrdata, arrlabel, save_dir)
+#    # Make list to numpy array. With this transform
+#    arrdata = np.asarray(sub_input_sequence) # [?, 33, 33, 1]
+#    arrlabel = np.asarray(sub_label_sequence) # [?, 21, 21, 1]
+#
+#    make_data(arrdata, arrlabel, save_dir)
 
     if not config.is_train:
         return nxs, nys, org_data
@@ -261,9 +331,12 @@ def batch_shuffle(data, label, batch_size):
     Shuffle the batch data
     """
     # Shuffle the batch data
-    shuffled_data = list(zip(data, label))
+    shuffled_data = list(zip(data, *label))
     random.shuffle(shuffled_data)
-    data_shuffled, label_shuffled = zip(*shuffled_data)
+    tmp = list(zip(*shuffled_data))
+    
+    data_shuffled = tmp[0]
+    label_shuffled = tmp[1:]
     
     return data_shuffled, label_shuffled
 

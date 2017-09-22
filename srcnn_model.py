@@ -27,10 +27,11 @@ class SRCNN(object):
 
     def __init__(self, 
                sess, 
-               image_size=33,
-               label_size=21, 
+               image_size=32,
+               label_size=20, 
                batch_size=128,
                color_dim=1, 
+               scale=4,
                checkpoint_dir=None, 
                output_dir=None,
                is_train=True):
@@ -54,6 +55,8 @@ class SRCNN(object):
         self.batch_size = batch_size
 
         self.color_dim = color_dim
+        
+        self.scale = scale
     
         self.checkpoint_dir = checkpoint_dir
         self.output_dir = output_dir
@@ -68,16 +71,23 @@ class SRCNN(object):
         """        
         # Define input and label images
         self.images = tf.placeholder(tf.float32, [None, self.image_size, self.image_size, self.color_dim], name='images')
-        self.labels = tf.placeholder(tf.float32, [None, self.label_size, self.label_size, self.color_dim], name='labels')
+        self.stg1_labels = tf.placeholder(tf.float32, [None, self.image_size, self.image_size, self.color_dim], name='stg1_labels')
+        self.stg2_labels = tf.placeholder(tf.float32, [None, self.image_size, self.image_size, self.color_dim], name='stg2_labels')
+        self.stg3_labels = tf.placeholder(tf.float32, [None, self.label_size, self.label_size, self.color_dim], name='stg3_labels')
         self.dropout = tf.placeholder(tf.float32, name='dropout')
        
-        mz = model_zoo.model_zoo(self.images, self.dropout, self.is_train, "srcnn_v1")
+        mz = model_zoo.model_zoo(self.images, self.dropout, self.is_train, "grr_srcnn_v1")
         
         # Build model
         self.pred = mz.build_model()
-    
+           
         # Define loss function (MSE) 
-        self.loss = tf.reduce_mean(tf.square(self.labels - self.pred))
+        ## Stage 1 loss:
+        self.stg1_loss = tf.reduce_mean(tf.square(self.stg1_labels - self.pred[0]))
+        ## Stage 2 loss:
+        self.stg2_loss = tf.reduce_mean(tf.square(self.stg2_labels - self.pred[1]))    
+        ## Stage 3 loss:
+        self.stg3_loss = tf.reduce_mean(tf.square(self.stg3_labels - self.pred[2]))
     
         self.saver = tf.train.Saver()
 
@@ -89,40 +99,44 @@ class SRCNN(object):
 
         # Define dataset path
         train_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.train_h5_name)
-        test_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.test_h5_name)
+        validation_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.validation_h5_name)
 
         # If dataset not exists, create it.
         if not os.path.exists(train_data_dir):
             print("Preparing training dataset...")
             save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.train_h5_name)
             input_setup(self.sess, config.train_dir, save_dir, config)
-        if not os.path.exists(test_data_dir):
-            print("Preparing testing dataset...")
-            save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.test_h5_name)
+        if not os.path.exists(validation_data_dir):
+            print("Preparing validation dataset...")
+            save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.validation_h5_name)
             input_setup(self.sess, config.test_dir, save_dir, config)
         
         # Read data from .h5 file
-        train_data, train_label = read_data(train_data_dir)
-        test_data, test_label = read_data(test_data_dir)
+        train_data, train_label = read_data(train_data_dir, config.stage_size)
+        validation_data, validation_label = read_data(validation_data_dir, config.stage_size)
     
         # Stochastic gradient descent with the standard backpropagation
         #self.train_op = tf.train.GradientDescentOptimizer(config.learning_rate).minimize(self.loss)
-        self.train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.loss)
+        self.stg1_train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.stg1_loss)
+        self.stg2_train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.stg2_loss)
+        self.stg3_train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.stg3_loss)
     
         self.sess.run(tf.global_variables_initializer())
 
         # Define iteration counter, timer and average loss
         itera_counter = 0
-        avg_loss = 0
-        avg_500_loss = 0
+#        avg_loss = [0]*config.stage_size
+        avg_500_loss = [0]*config.stage_size
         start_time = time.time()   
         
         # Load checkpoint 
-        if self.load(self.checkpoint_dir, config.scale):
+        if self.load(self.checkpoint_dir, config.ckpt_name):
             print(" [*] Load SUCCESS")
         else:
             print(" [!] Load failed...")
              
+        batch_labels = [None]*config.stage_size            
+            
         for ep in range(config.epoch):
             # Run by batch images
             train_batch_idxs = len(train_data) // config.batch_size
@@ -133,37 +147,66 @@ class SRCNN(object):
                   
                 # Get the training and testing data
                 batch_images = train_data[idx*config.batch_size : (idx+1)*config.batch_size]
-                batch_labels = train_label[idx*config.batch_size : (idx+1)*config.batch_size]
-                  
+                
+                batch_labels[0] = train_label[0][idx*config.batch_size : (idx+1)*config.batch_size]
+                batch_labels[1] = train_label[1][idx*config.batch_size : (idx+1)*config.batch_size]
+                batch_labels[2] = train_label[2][idx*config.batch_size : (idx+1)*config.batch_size]
+                                 
                 # Run the model
-                _, err = self.sess.run([self.train_op, self.loss], 
-                                       feed_dict={
-                                                   self.images: batch_images, 
-                                                   self.labels: batch_labels,
-                                                   self.dropout: 1.
-                                                 })
+                _, _, _, stg1_err, stg2_err, stg3_err = self.sess.run([self.stg1_train_op, 
+                                                                       self.stg2_train_op, 
+                                                                       self.stg3_train_op, 
+                                                                       self.stg1_loss, 
+                                                                       self.stg2_loss, 
+                                                                       self.stg3_loss], 
+                                                                       feed_dict={
+                                                                                   self.images: batch_images, 
+                                                                                   self.stg1_labels: batch_labels[0],
+                                                                                   self.stg2_labels: batch_labels[1],
+                                                                                   self.stg3_labels: batch_labels[2],
+                                                                                   self.dropout: 1.
+                                                                                  })
     
-                avg_loss += err
-                avg_500_loss += err
+                #avg_loss[0] += stg1_err
+                avg_500_loss[0] += stg1_err
+                
+                #avg_loss[1] += stg2_err
+                avg_500_loss[1] += stg2_err
+                
+                #avg_loss[2] += stg3_err
+                avg_500_loss[2] += stg3_err
     
                 if itera_counter % 10 == 0:
-                    print("Epoch: [%2d], step: [%2d], time: [%4.4f], loss: [%.8f]" \
-                         % ((ep+1), itera_counter, time.time()-start_time, err))
+                    print("Epoch: [%2d], step: [%2d], time: [%4.4f], stg1 loss: [%.8f], stg2 loss: [%.8f], stg3 loss: [%.8f]" \
+                         % ((ep+1), itera_counter, time.time()-start_time, stg1_err, stg2_err, stg3_err))
     
                 if itera_counter % 500 == 0:
-                    self.save(config.checkpoint_dir, config.scale, itera_counter)
+                    self.save(config.checkpoint_dir, config.ckpt_name, itera_counter)
                     
                     # Validation
                     ## Run the test images
-                    _, test_err = self.sess.run([self.train_op, self.loss], 
-                                           feed_dict={
-                                                       self.images: test_data, 
-                                                       self.labels: test_label,
-                                                       self.dropout: 1.
-                                                     })
-                    print("==> Epoch: [%2d], average loss of 500 steps: [%.8f], average loss: [%.8f], validation loss: [%.8f]" \
-                         % ((ep+1), avg_500_loss/500, avg_loss/itera_counter, test_err))            
-                    avg_500_loss = 0                                      
+                    _, _, _, val_stg1_err, val_stg2_err, val_stg3_err = self.sess.run([self.stg1_train_op,
+                                                                                       self.stg2_train_op, 
+                                                                                       self.stg3_train_op, 
+                                                                                       self.stg1_loss,
+                                                                                       self.stg2_loss,
+                                                                                       self.stg3_loss], 
+                                                                                       feed_dict={
+                                                                                                   self.images: validation_data, 
+                                                                                                   self.stg1_labels: validation_label[0],
+                                                                                                   self.stg2_labels: validation_label[1],
+                                                                                                   self.stg3_labels: validation_label[2],
+                                                                                                   self.dropout: 1.
+                                                                                                  })
+                    
+#                    print("==> Epoch: [%2d], average loss: stg1: [%.8f], stg2: [%.8f], stg3: [%.8f]" \
+#                         % ((ep+1), avg_loss[0]/500, avg_loss[1]/500, avg_loss[2]/500))            
+                    print("==> Epoch: [%2d], average loss of 500 steps: stg1: [%.8f], stg2: [%.8f], stg3: [%.8f]" \
+                         % ((ep+1), avg_500_loss[0]/500, avg_500_loss[1]/500, avg_500_loss[2]/500))               
+                    print("==> Epoch: [%2d], validation stg1 loss: [%.8f], stg2 loss: [%.8f], stg3 loss: [%.8f]" \
+                          % ((ep+1), val_stg1_err, val_stg2_err, val_stg3_err))            
+                    
+                    avg_500_loss = [0]*config.stage_size                                     
     
     def test(self, config):
         """
@@ -172,7 +215,7 @@ class SRCNN(object):
         print("Testing...")
 
         # Load checkpoint        
-        if self.load(self.checkpoint_dir, config.scale):
+        if self.load(self.checkpoint_dir, config.ckpt_name):
           print(" [*] Load SUCCESS")
         else:
           print(" [!] Load failed...")        
@@ -183,19 +226,26 @@ class SRCNN(object):
         
         # Read data from .h5 file
         data_dir = os.path.join('./{}'.format(config.checkpoint_dir), "test.h5")
-        test_data, test_label = read_data(data_dir)
+        test_data, test_label = read_data(data_dir, config.stage_size)
            
-        result = self.pred.eval({
-                                    self.images: test_data, 
-                                    self.labels: test_label,
-                                    self.dropout: 1.
+        result = self.pred[2].eval({
+                                   self.images: test_data, 
+                                   self.stg1_labels: test_label[0],
+                                   self.stg2_labels: test_label[1],
+                                   self.stg3_labels: test_label[2],
+                                   self.dropout: 1.
                                  })
         
+        print(nxs)
+    
         # Run all the test images
         idx = 0 # record the patches' indeies 
         for i in range(len(nxs)):
             tmp_img = merge(result[idx:idx+nxs[i]*nys[i], :, :, :], [nxs[i], nys[i]])
             tmp_img = tmp_img.squeeze()
+            
+            print(org_data[i])
+            print("nxs[{}] = {}, nys[{}] = {}".format(i, nxs[i], i, nys[i]))
             
             # Save output image
             base = os.path.basename(org_data[i])
@@ -223,7 +273,7 @@ class SRCNN(object):
             ## Update index
             idx += nxs[i]*nys[i]
 
-    def save(self, checkpoint_dir, scale, step):
+    def save(self, checkpoint_dir, ckpt_name, step):
         """
         Save the checkpoint. 
         According to the scale, use different folder to save the models.
@@ -231,7 +281,12 @@ class SRCNN(object):
         
         print(" [*] Saving checkpoints...step: [{}]".format(step))
         model_name = "SRCNN.model"
-        model_dir = "%s_%s_%s" % ("srcnn", "scale", scale)
+        
+        if ckpt_name == "":
+            model_dir = "%s_%s_%s" % ("srcnn", "scale", self.scale)
+        else:
+            model_dir = ckpt_name
+        
         checkpoint_dir = os.path.join(checkpoint_dir, model_dir)
     
         if not os.path.exists(checkpoint_dir):
@@ -241,14 +296,18 @@ class SRCNN(object):
                         os.path.join(checkpoint_dir, model_name),
                         global_step=step)
 
-    def load(self, checkpoint_dir, scale):
+    def load(self, checkpoint_dir, ckpt_name=""):
         """
         Load the checkpoint. 
         According to the scale, read different folder to load the models.
         """     
         
         print(" [*] Reading checkpoints...")
-        model_dir = "%s_%s_%s" % ("srcnn", "scale", scale)
+        if ckpt_name == "":
+            model_dir = "%s_%s_%s" % ("srcnn", "scale", self.scale)
+        else:
+            model_dir = ckpt_name
+            
         checkpoint_dir = os.path.join(checkpoint_dir, model_dir)
     
         ckpt = tf.train.get_checkpoint_state(checkpoint_dir)

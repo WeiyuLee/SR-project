@@ -121,10 +121,58 @@ class model_zoo:
 
             
         return layer3_output
+
    
+    def grr_srcnn_v1(self):
+
+        model_params = {
+            
+            # Stage 1
+            "stg1_conv1": [3, 3, 64],
+            "stg1_conv2": [1, 1, 32],
+            "stg1_conv3": [3, 3, 1],                       
+
+            # Stage 2
+            "stg2_conv1": [3, 3, 64],
+            "stg2_conv2": [1, 1, 32],
+            "stg2_conv3": [5, 5, 1], 
+            
+            # Stage 3
+            "stg3_conv1": [9, 9, 64],
+            "stg3_conv2": [1, 1, 32],
+            "stg3_conv3": [5, 5, 1],             
+        }                
+        
+        with tf.name_scope("grr_srcnn_v1"):           
+ 
+            init = tf.random_normal_initializer(mean=0, stddev=1e-3)
+
+            #print(self.inputs.shape)
+
+            # Stage 1            
+            stg1_layer1_output = nf.convolution_layer(self.inputs,        model_params["stg1_conv1"], [1,1,1,1], name="stg1_conv1", padding="SAME", initializer=init)           
+            stg1_layer2_output = nf.convolution_layer(stg1_layer1_output, model_params["stg1_conv2"], [1,1,1,1], name="stg1_conv2", padding="SAME", initializer=init)
+            stg1_layer3_output = nf.convolution_layer(stg1_layer2_output, model_params["stg1_conv3"], [1,1,1,1], name="stg1_conv3", padding="SAME", initializer=init, activat_fn=None)
+
+            #print(stg1_layer3_output.shape)
+
+            # Stage 2            
+            stg2_layer1_output = nf.convolution_layer(stg1_layer3_output, model_params["stg2_conv1"], [1,1,1,1], name="stg2_conv1", padding="SAME", initializer=init)           
+            stg2_layer2_output = nf.convolution_layer(stg2_layer1_output, model_params["stg2_conv2"], [1,1,1,1], name="stg2_conv2", padding="SAME", initializer=init)
+            stg2_layer3_output = nf.convolution_layer(stg2_layer2_output, model_params["stg2_conv3"], [1,1,1,1], name="stg2_conv3", padding="SAME", initializer=init, activat_fn=None)
+
+            #print(stg2_layer3_output.shape)
+
+            # Stage 3
+            stg3_layer1_output = nf.convolution_layer(stg2_layer3_output, model_params["stg3_conv1"], [1,1,1,1], name="stg3_conv1", padding="VALID", initializer=init)           
+            stg3_layer2_output = nf.convolution_layer(stg3_layer1_output, model_params["stg3_conv2"], [1,1,1,1], name="stg3_conv2", padding="VALID", initializer=init)
+            stg3_layer3_output = nf.convolution_layer(stg3_layer2_output, model_params["stg3_conv3"], [1,1,1,1], name="stg3_conv3", padding="VALID", initializer=init, activat_fn=None)
+            
+        return stg1_layer3_output, stg2_layer3_output, stg3_layer3_output    
+    
     
     def build_model(self):
-        model_list = ["googleLeNet_v1", "resNet_v1", "srcnn_v1"]
+        model_list = ["googleLeNet_v1", "resNet_v1", "srcnn_v1", "grr_srcnn_v1"]
         
         if self.model_ticket not in model_list:
             print("sorry, wrong ticket!")
