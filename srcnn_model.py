@@ -4,10 +4,11 @@ Created on Tue Sep 12 11:53:38 2017
 
 @author: Weiyu_Lee
 """
-import time
 import os
 import sys
 sys.path.append('./utility')
+
+from tqdm import tqdm
 
 from utils import (
   read_data, 
@@ -63,6 +64,11 @@ class SRCNN(object):
         
         self.is_train = is_train
         
+        # Used for recording testing patches' assemble information
+        self.nxs = []
+        self.nys = []
+        self.org_data = []
+        
         self.build_model()
 
     def build_model(self):###
@@ -89,7 +95,19 @@ class SRCNN(object):
         ## Stage 3 loss:
         self.stg3_loss = tf.reduce_mean(tf.square(self.stg3_labels - self.pred[2]))
     
+        self.loss = tf.add(tf.add(self.stg1_loss, self.stg2_loss), self.stg3_loss)
+    
         self.saver = tf.train.Saver()
+
+    def prepare_data(self, config):
+        
+        print("Preparing training dataset...")
+        save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.train_h5_name)
+        input_setup(self.sess, config.train_dir, save_dir, config.train_extract_stride, False, config)
+
+        print("Preparing testing dataset...")
+        save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.test_h5_name)
+        self.nxs, self.nys, self.org_data = input_setup(self.sess, config.test_dir, save_dir, config.test_extract_stride, True, config)
 
     def train(self, config):
         """
@@ -99,50 +117,41 @@ class SRCNN(object):
 
         # Define dataset path
         train_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.train_h5_name)
-        validation_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.validation_h5_name)
-
-        # If dataset not exists, create it.
-        if not os.path.exists(train_data_dir):
-            print("Preparing training dataset...")
-            save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.train_h5_name)
-            input_setup(self.sess, config.train_dir, save_dir, config)
-        if not os.path.exists(validation_data_dir):
-            print("Preparing validation dataset...")
-            save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.validation_h5_name)
-            input_setup(self.sess, config.test_dir, save_dir, config)
+        test_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.test_h5_name)
         
         # Read data from .h5 file
         train_data, train_label = read_data(train_data_dir, config.stage_size)
-        validation_data, validation_label = read_data(validation_data_dir, config.stage_size)
+        test_data, test_label = read_data(test_data_dir, config.stage_size)
     
-        # Stochastic gradient descent with the standard backpropagation
-        #self.train_op = tf.train.GradientDescentOptimizer(config.learning_rate).minimize(self.loss)
-        self.stg1_train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.stg1_loss)
-        self.stg2_train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.stg2_loss)
-        self.stg3_train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.stg3_loss)
+        # Stochastic gradient descent with the standard backpropagation       
+        self.train_op = tf.train.AdamOptimizer(config.learning_rate).minimize(self.loss)
     
         self.sess.run(tf.global_variables_initializer())
 
         # Define iteration counter, timer and average loss
         itera_counter = 0
-#        avg_loss = [0]*config.stage_size
-        avg_500_loss = [0]*config.stage_size
-        start_time = time.time()   
+        avg_500_loss = [0]*(config.stage_size+1)
         
         # Load checkpoint 
-        if self.load(self.checkpoint_dir, config.ckpt_name):
+        if self.load_ckpt(self.checkpoint_dir, config.ckpt_name):
             print(" [*] Load SUCCESS")
         else:
             print(" [!] Load failed...")
              
         batch_labels = [None]*config.stage_size            
-            
-        for ep in range(config.epoch):
+                   
+        train_batch_num = len(train_data) // config.batch_size
+        
+        epoch_pbar = tqdm(range(config.epoch))
+        for ep in epoch_pbar:            
             # Run by batch images
-            train_batch_idxs = len(train_data) // config.batch_size
             train_data, train_label = batch_shuffle(train_data, train_label, config.batch_size)
-            
-            for idx in range(0, train_batch_idxs):
+        
+            epoch_pbar.set_description("Epoch: [%2d]" % ((ep+1)))
+            epoch_pbar.refresh()
+        
+            batch_pbar = tqdm(range(0, train_batch_num), desc="Batch: [0]")
+            for idx in batch_pbar:                
                 itera_counter += 1
                   
                 # Get the training and testing data
@@ -153,61 +162,53 @@ class SRCNN(object):
                 batch_labels[2] = train_label[2][idx*config.batch_size : (idx+1)*config.batch_size]
                                  
                 # Run the model
-                _, _, _, stg1_err, stg2_err, stg3_err = self.sess.run([self.stg1_train_op, 
-                                                                       self.stg2_train_op, 
-                                                                       self.stg3_train_op, 
-                                                                       self.stg1_loss, 
-                                                                       self.stg2_loss, 
-                                                                       self.stg3_loss], 
-                                                                       feed_dict={
-                                                                                   self.images: batch_images, 
-                                                                                   self.stg1_labels: batch_labels[0],
-                                                                                   self.stg2_labels: batch_labels[1],
-                                                                                   self.stg3_labels: batch_labels[2],
-                                                                                   self.dropout: 1.
-                                                                                  })
-    
-                #avg_loss[0] += stg1_err
+                _, stg1_err, stg2_err, stg3_err, total_err = self.sess.run([  self.train_op, 
+                                                                              self.stg1_loss, 
+                                                                              self.stg2_loss, 
+                                                                              self.stg3_loss,
+                                                                              self.loss], 
+                                                                              feed_dict={
+                                                                                          self.images: batch_images, 
+                                                                                          self.stg1_labels: batch_labels[0],
+                                                                                          self.stg2_labels: batch_labels[1],
+                                                                                          self.stg3_labels: batch_labels[2],
+                                                                                          self.dropout: 1.
+                                                                                        })   
+
                 avg_500_loss[0] += stg1_err
-                
-                #avg_loss[1] += stg2_err
                 avg_500_loss[1] += stg2_err
-                
-                #avg_loss[2] += stg3_err
                 avg_500_loss[2] += stg3_err
+                avg_500_loss[3] += total_err
     
-                if itera_counter % 10 == 0:
-                    print("Epoch: [%2d], step: [%2d], time: [%4.4f], stg1 loss: [%.8f], stg2 loss: [%.8f], stg3 loss: [%.8f]" \
-                         % ((ep+1), itera_counter, time.time()-start_time, stg1_err, stg2_err, stg3_err))
-    
-                if itera_counter % 500 == 0:
-                    self.save(config.checkpoint_dir, config.ckpt_name, itera_counter)
-                    
-                    # Validation
-                    ## Run the test images
-                    _, _, _, val_stg1_err, val_stg2_err, val_stg3_err = self.sess.run([self.stg1_train_op,
-                                                                                       self.stg2_train_op, 
-                                                                                       self.stg3_train_op, 
-                                                                                       self.stg1_loss,
-                                                                                       self.stg2_loss,
-                                                                                       self.stg3_loss], 
-                                                                                       feed_dict={
-                                                                                                   self.images: validation_data, 
-                                                                                                   self.stg1_labels: validation_label[0],
-                                                                                                   self.stg2_labels: validation_label[1],
-                                                                                                   self.stg3_labels: validation_label[2],
-                                                                                                   self.dropout: 1.
-                                                                                                  })
-                    
-#                    print("==> Epoch: [%2d], average loss: stg1: [%.8f], stg2: [%.8f], stg3: [%.8f]" \
-#                         % ((ep+1), avg_loss[0]/500, avg_loss[1]/500, avg_loss[2]/500))            
-                    print("==> Epoch: [%2d], average loss of 500 steps: stg1: [%.8f], stg2: [%.8f], stg3: [%.8f]" \
-                         % ((ep+1), avg_500_loss[0]/500, avg_500_loss[1]/500, avg_500_loss[2]/500))               
-                    print("==> Epoch: [%2d], validation stg1 loss: [%.8f], stg2 loss: [%.8f], stg3 loss: [%.8f]" \
-                          % ((ep+1), val_stg1_err, val_stg2_err, val_stg3_err))            
-                    
-                    avg_500_loss = [0]*config.stage_size                                     
-    
+                batch_pbar.set_description("Batch: [%2d]" % (idx+1))
+                batch_pbar.refresh()
+            
+            if ep % 5 == 0:
+                self.save_ckpt(config.checkpoint_dir, config.ckpt_name, itera_counter)
+                
+                # Validation
+                ## Run the test images
+                val_stg1_err, val_stg2_err, val_stg3_err, val_total_err = self.sess.run([self.stg1_loss,
+                                                                                     self.stg2_loss,
+                                                                                     self.stg3_loss,
+                                                                                     self.loss], 
+                                                                                     feed_dict={
+                                                                                                 self.images: test_data, 
+                                                                                                 self.stg1_labels: test_label[0],
+                                                                                                 self.stg2_labels: test_label[1],
+                                                                                                 self.stg3_labels: test_label[2],
+                                                                                                 self.dropout: 1.
+                                                                                               })
+ 
+                for i in range(len(avg_500_loss)):
+                    avg_500_loss[i] /= (train_batch_num*5)
+                print("Epoch: [%2d], Average loss of 500 steps: stg loss: [%.8f, %.8f, %.8f], total loss: [%.8f]" \
+                     % ((ep+1), avg_500_loss[0], avg_500_loss[1], avg_500_loss[2], avg_500_loss[3]))               
+                print("Epoch: [%2d], Test stg loss: [%.8f, %.8f, %.8f], total loss: [%.8f]\n" \
+                      % ((ep+1), val_stg1_err, val_stg2_err, val_stg3_err, val_total_err))       
+                
+                avg_500_loss = [0]*(config.stage_size+1)                                     
+            
     def test(self, config):
         """
         Testing process.
@@ -215,18 +216,14 @@ class SRCNN(object):
         print("Testing...")
 
         # Load checkpoint        
-        if self.load(self.checkpoint_dir, config.ckpt_name):
+        if self.load_ckpt(self.checkpoint_dir, config.ckpt_name):
           print(" [*] Load SUCCESS")
         else:
           print(" [!] Load failed...")        
         
-        # Preparing testing dataset (save the cropped image and .h5 file)        
-        save_dir = os.path.join(os.getcwd(), config.checkpoint_dir, config.test_h5_name)
-        nxs, nys, org_data = input_setup(self.sess, config.test_dir, save_dir, config)
-        
         # Read data from .h5 file
-        data_dir = os.path.join('./{}'.format(config.checkpoint_dir), "test.h5")
-        test_data, test_label = read_data(data_dir, config.stage_size)
+        test_data_dir = os.path.join('./{}'.format(config.checkpoint_dir), config.test_h5_name)
+        test_data, test_label = read_data(test_data_dir, config.stage_size)
            
         result = self.pred[2].eval({
                                    self.images: test_data, 
@@ -236,19 +233,20 @@ class SRCNN(object):
                                    self.dropout: 1.
                                  })
         
-        print(nxs)
+        print(self.nxs)
     
         # Run all the test images
         idx = 0 # record the patches' indeies 
-        for i in range(len(nxs)):
-            tmp_img = merge(result[idx:idx+nxs[i]*nys[i], :, :, :], [nxs[i], nys[i]])
+        avg_psnr = 0
+        for i in range(len(self.nxs)):
+            tmp_img = merge(result[idx:idx+self.nxs[i]*self.nys[i], :, :, :], [self.nxs[i], self.nys[i]])
             tmp_img = tmp_img.squeeze()
             
-            print(org_data[i])
-            print("nxs[{}] = {}, nys[{}] = {}".format(i, nxs[i], i, nys[i]))
+            print(self.org_data[i])
+            print("nxs[{}] = {}, nys[{}] = {}".format(i, self.nxs[i], i, self.nys[i]))
             
             # Save output image
-            base = os.path.basename(org_data[i])
+            base = os.path.basename(self.org_data[i])
             output_filename, output_ext = os.path.splitext(base)
             output_dir = os.path.join(os.getcwd(), config.output_dir)
                       
@@ -271,9 +269,14 @@ class SRCNN(object):
             print("[{}] SRCNN PSNR: [{}]".format(output_filename, srcnn_psnr_value))
         
             ## Update index
-            idx += nxs[i]*nys[i]
+            idx += self.nxs[i]*self.nys[i]
+            
+            ## Update avg. psnr value
+            avg_psnr += srcnn_psnr_value
 
-    def save(self, checkpoint_dir, ckpt_name, step):
+        print("Average PSNR: [{}]".format(avg_psnr/len(self.nxs)))
+
+    def save_ckpt(self, checkpoint_dir, ckpt_name, step):
         """
         Save the checkpoint. 
         According to the scale, use different folder to save the models.
@@ -296,7 +299,7 @@ class SRCNN(object):
                         os.path.join(checkpoint_dir, model_name),
                         global_step=step)
 
-    def load(self, checkpoint_dir, ckpt_name=""):
+    def load_ckpt(self, checkpoint_dir, ckpt_name=""):
         """
         Load the checkpoint. 
         According to the scale, read different folder to load the models.
