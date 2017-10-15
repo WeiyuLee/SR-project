@@ -238,8 +238,7 @@ class SRCNN(object):
         """     
         
         print(" [*] Reading checkpoints...")
-        model_dir = "%s_%s_%s" % ("srcnn", "scale", scale)
-        checkpoint_dir = os.path.join(checkpoint_dir, model_dir)
+]        checkpoint_dir = os.path.join(checkpoint_dir, model_dir)
     
         ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
         
