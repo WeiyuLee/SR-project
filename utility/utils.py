@@ -255,7 +255,7 @@ def psnr(img1, img2, max_I=255):
     
     return psnr
 
-def imsave(image, path, max_I=255):   
+def imsave(image, path, max_I=255, is_normalized=False):   
     """
     Save the image by scipy.misc.toimage()
     
@@ -264,7 +264,8 @@ def imsave(image, path, max_I=255):
         Should not use scipy.misc.imsave() to save image, 
         it might casue info. loss due to the data type.        
     """
-    image = image*max_I
+    if is_normalized==True: image = image*max_I
+    print(np.max(image))
     output_image = scipy.misc.toimage(image, high=np.max(image), low=np.min(image), mode='L')
     output_image.save(path)
     #return scipy.misc.imsave(path, image)
