@@ -1,5 +1,10 @@
 import sys
+import os
+import shutil
+import random
 import tensorflow as tf
+import scipy
+import numpy as np
 sys.path.append('./utility')
 from utility import model_zoo as mz
 
@@ -26,6 +31,7 @@ def load_dataset(data_dir, isRandom = True):
     return
 
 def get_batch(batch_size,original_size,shrunk_size):
+
 	x =[]
 	y =[]
 	img_indices = random.sample(range(len(train_set)),batch_size)
@@ -36,7 +42,11 @@ def get_batch(batch_size,original_size,shrunk_size):
 		x_img = scipy.misc.imresize(img,(shrunk_size,shrunk_size))
 		x.append(x_img)
 		y.append(img)
-	return x,y
+		
+	x = np.stack(x)
+	y = np.stack(y)
+
+	return x, y
 
 def crop_center(img,cropx,cropy):
 	y,x,_ = img.shape
@@ -68,7 +78,7 @@ optimizer = tf.train.AdamOptimizer()
 #This is the train operation for our objective
 train_op = optimizer.minimize(l1_loss)    
 
-mse = tf.reduce_mean(tf.squared_difference(image_target,output))    
+mse = tf.reduce_mean(tf.squared_difference(image_target,netout))    
 PSNR = tf.constant(255**2,dtype=tf.float32)/mse
 
 tf.summary.scalar("loss",l1_loss)
@@ -79,8 +89,12 @@ tf.summary.image("output_image",netout+mean_x)
 
 merged = tf.summary.merge_all()
 
-data_path = '/home/ubuntu/dataset/SR_set/General-100'
-save_dir = '/home/ubuntu/model/model/SR_project/dirtytest'
+#data_path = '/home/ubuntu/dataset/SR_set/General-100'
+#save_dir = '/home/ubuntu/model/model/SR_project/dirtytest'
+data_path = '/home/dashmoment/workspace/SR-project-srcnn/Train'
+save_dir = '/home/dashmoment/model/SR_project/dirtytest'
+
+
 
 if os.path.exists(save_dir):
             shutil.rmtree(save_dir)
@@ -88,19 +102,37 @@ os.mkdir(save_dir)
 os.mkdir(os.path.join(save_dir, 'model'))
 os.mkdir(os.path.join(save_dir, 'log'))
 
-self.sess = tf.Session()
-self.saver = tf.train.Saver(3)
-
-
 load_dataset(data_path)
 batch_size = 32
 original_size = img_size*scale
 shrunk_size = img_size
 
+sess = tf.Session()
+saver = tf.train.Saver(max_to_keep=3)
+summary_writer = tf.summary.FileWriter(os.path.join(save_dir, 'log'), sess.graph)    
+
+sess.run(tf.global_variables_initializer())
+
+
 for i in range(100000):
 
+	print("Iteration:", i)
 	train_x, train_y = get_batch(batch_size, original_size, shrunk_size)
+	
+	feed_dict_train = {
+						x:train_x,
+						y:train_y,
+						dropout:1
+						}
 
+	_,  edsr_loss, train_sum = sess.run([train_op, l1_loss, merged], feed_dict = feed_dict_train)
 
+	
+	print("L1_loss: ", edsr_loss)
+
+	if i % 10 == 0:
+		summary_writer.add_summary(train_sum, i)
+		saver.save(sess, os.path.join(save_dir, 'model','edsr.ckpt'), global_step=i)
+	
 
 
