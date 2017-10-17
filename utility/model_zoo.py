@@ -1,6 +1,7 @@
 import tensorflow as tf
 import netfactory as nf
 import numpy as np
+import utils as ut
 
 class model_zoo:
     
@@ -121,10 +122,37 @@ class model_zoo:
 
             
         return layer3_output
-   
+    
+
+    def EDSR_v1(self):
+
+        scale = 2
+        scaling_factor = 0.1
+        num_resblock = 32
+            
+        model_params = {
+
+                        'conv1': [3,3,256],
+                        'resblock1': [3,3,256],
+                        'conv2': [3,3,256],
+                        }
+
+        net = nf.convolution_layer(self.inputs, model_params["conv1"], [1,1,1,1], name="conv1")
+        shortcut1 = net
+
+        resblock = []
+        [resblock.append(model_params['resblock1']) for i in range(num_resblock)]
+        net = nf.edsr_resblock(net, resblock, repeations = num_resblock, scale = scaling_factor, name="resblock1")
+        net = nf.convolution_layer(self.inputs, model_params["conv2"], [1,1,1,1], name="conv2")
+        net = net + shortcut1
+
+        output = ut.upsample(net, scale, 256, None)
+
+        return output
+
     
     def build_model(self):
-        model_list = ["googleLeNet_v1", "resNet_v1", "srcnn_v1"]
+        model_list = ["googleLeNet_v1", "resNet_v1", "srcnn_v1", "EDSR_v1"]
         
         if self.model_ticket not in model_list:
             print("sorry, wrong ticket!")

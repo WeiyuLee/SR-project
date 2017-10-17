@@ -125,7 +125,27 @@ def global_avg_pooling(inputs, flatten="False", name= 'global_avg_pooling'):
         
     return netout
     
-    
+
+def edsr_resblock(inputs, kernel_shape, stride = [1,1,1,1], repeations = 1, scale = 1, name="resblock"):
+
+    assert len(kernel_shape) == repeations, "Provide kernel shape shall be equal to repeations!"
+
+    for i in range(repeations):
+
+        pre_shape = inputs.get_shape()[-1]   
+        k_shape = kernel_shape[i]
+        rkernel_shape = [k_shape[0], k_shape[1], pre_shape, k_shape[2]]     
+        net = convolution_layer(inputs, rkernel_shape, stride, name= name + "_{}_{}".format(i,1))
+        net = convolution_layer(net, rkernel_shape, stride, name= name + "_{}_{}".format(i,2), activat_fn=None)
+        net = net*scale
+        inputs = inputs + net
+
+
+    outputs = inputs
+
+    return outputs
+
+
 
 #def simple_shortcut_test():
 #    

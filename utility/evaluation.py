@@ -5,6 +5,7 @@ import os
 import tensorflow as tf
 import utils as ut
 import scipy.misc
+import sys
 
 class becnchmark:
 
@@ -312,13 +313,13 @@ class evaluation:
 			dataset = dataset_pair[set_key]
 			bechmark_val[set_key] = {}
 
-			print("Evaluating dataset: ", set_key)
+			sys.stdout.write("Evaluating dataset: " + set_key + '\n')
 			
 			for scale_key in dataset:
 				dataset_scale = dataset[scale_key]
 				bechmark_val[set_key][scale_key] = {}
 
-				print("Evaluating scales: ", scale_key)
+				sys.stdout.write("Evaluating scales: " + str(scale_key) + '\n')
 
 				progress = 0
 
@@ -349,9 +350,15 @@ class evaluation:
 						for l in range(len(test_input)):
 							tmp = cv2.resize(test_input[l], (up_subimg_size[1]+2*up_padding_size[1],up_subimg_size[0]+2*up_padding_size[0]),  interpolation = cv2.INTER_CUBIC)
 							output_stack[key[l]] = tmp
-			
+
+
 						bicubic_output = merge_img(cv2.imread(HR_img).shape, output_stack, up_padding_size,up_subimg_size, scale)
-				
+						
+						progress_pr = int((progress/len(dataset_scale)*10)) 
+						sys.stdout.write("Progress: " + str(progress) + '/' + str(len(dataset_scale))+ ' |'+'#'*progress_pr + '-'*(10-progress_pr) + '\r')
+						if (progress) == len(dataset_scale):sys.stdout.write('\n')
+						else: sys.stdout.flush()	
+
 						results = becnchmark.run(bicubic_output, input_pair['target'])
 						bechmark_val[set_key][scale_key][input_key]["bicubic"]["psnr"] = results[0]
 						bechmark_val[set_key][scale_key][input_key]["bicubic"]["SSIM"] = results[1]
@@ -361,48 +368,3 @@ class evaluation:
 
 eval = evaluation('/home/ubuntu/dataset/SuperResolution', ["Set5", "Set14", "BSD100"], [2,3,4], None, [24,24], [3,3])
 results = eval.run_evaluation()
-print(results)
-
-"""
-
-dataset_pair = dataset_setup()
-becnchmark = becnchmark()
-
-for set_key in dataset_pair:
-	dataset = dataset_pair[set_key]
-	
-	for scale_key in dataset:
-		dataset_scale = dataset[scale_key]
-		for input_key in dataset_scale:
-
-			scale =  int(scale_key)
-			padding_size = [3,3]
-			subimg_size = [24,24]
-
-			HR_img = dataset_scale[input_key]['HR']
-			LR_img = dataset_scale[input_key]['LR']
-
-			input_pair = input_setup(LR_img, HR_img, padding_size = padding_size, subimg_size = subimg_size, scale = scale)
-
-			test_input = input_pair['inputs']
-			key =  input_pair['input_key']
-			
-			output_stack = {}
-
-			padding_size = [padding_size[0]*scale, padding_size[1]*scale]
-			subimg_size = [subimg_size[0]*scale, subimg_size[1]*scale]
-	
-			for l in range(len(test_input)):
-				tmp = cv2.resize(test_input[l], (subimg_size[1]+2*padding_size[1],subimg_size[0]+2*padding_size[0]),  interpolation = cv2.INTER_CUBIC)
-				output_stack[key[l]] = tmp
-	
-			merge_input = merge_img(cv2.imread(HR_img).shape, output_stack, padding_size,subimg_size, scale)
-		
-			psnr_value = becnchmark.run(merge_input, input_pair['target'])
-
-
-			cv2.imwrite("small.jpg", merge_input)
-			cv2.imwrite("target.jpg", input_pair['target'])
-
-
-"""
